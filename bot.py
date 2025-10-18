@@ -1,103 +1,65 @@
-# Импорт системных библиотек и модулей aiogram
+# Импорт необходимых библиотек
 import os
 import asyncio
-from collections import defaultdict
-from datetime import datetime
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command, StateFilter
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.enums import ParseMode
+from aiogram.filters import CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram import F
-# Добавляем импорт для функции поддержания активности Replit
-from keep_alive import keep_alive 
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from keep_alive import keep_alive # Импорт веб-сервера для Replit/Render
+import logging
 
-# --- КОНФИГУРАЦИЯ ---
-# Бот будет брать API_TOKEN из переменной окружения Replit (Secrets)
-API_TOKEN = os.getenv("API_TOKEN") 
-# ЗАМЕНИТЕ ЭТИ ID НА РЕАЛЬНЫЕ:
-LAWYERS_GROUP_ID = -1002929346188
-ARCHIVE_GROUP_ID = -1003171406428
+# Конфигурация логирования
+logging.basicConfig(level=logging.INFO)
 
-# Инициализация
-if not API_TOKEN:
-    print("❌ ОШИБКА: API_TOKEN не найден. Проверьте переменную окружения Replit (Secrets).")
-    exit()
-    
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher()
+# --- КОНСТАНТЫ И НАСТРОЙКИ ---
 
-# --- FSM (Машина конечных состояний) ---
+# ВНИМАНИЕ: Замените эти заглушки на реальные ID ваших групп!
+# ID группы, куда будут отправляться новые заявки (Должен быть числовым)
+LAWYERS_GROUP_ID = -1002929346188  # Пример: -100XXXXXXXXXX
+# ID группы для архива
+ARCHIVE_GROUP_ID = -1003171406428   # Пример: -100YYYYYYYYYY
+
+# Токен берется из переменных окружения Replit Secrets
+API_TOKEN = os.getenv("API_TOKEN")
+
+# Словник категорий з перекладом (УКР)
+CATEGORIES_UK = {
+    "Сімейне право": "Сімейне право",
+    "Кримінальне право": "Кримінальне право",
+    "Нерухомість": "Нерухомість",
+    "Інше": "Інше"
+}
+
+# --- FSM (Finite State Machine) ---
 class Form(StatesGroup):
+    """Классы состояний для конечного автомата"""
     waiting_for_name = State()
     waiting_for_contact = State()
     waiting_for_category = State()
-    waiting_for_problem = State()
+    waiting_for_description = State()
 
-# --- Категории ---
-# Украинский (uk) установлен как единственный язык
-CATEGORIES = {
-    "dtp": {"ru": "🚗 ДТП", "uk": "🚗 ДТП"},
-    "family": {"ru": "⚖️ Семейные споры", "uk": "⚖️ Сімейні спори"},
-    "admin": {"ru": "🏢 Адміністративні/цивільні", "uk": "🏢 Адміністративні/цивільні"},
-    "criminal": {"ru": "🕵️ Уголовные дела", "uk": "🕵️ Кримінальні справи"},
-    "tck": {"ru": "🛡️ ТЦК", "uk": "🛡️ ТЦК"},
-    "other": {"ru": "❓ Иное", "uk": "❓ Інше"}
-}
-
-# --- Тексты для разных языков (Используем только uk) ---
-TEXTS = {
-    "ask_name": {
-        "uk": "Введіть ваше ім'я:"
-    },
-    "ask_contact": {
-        "uk": "Вкажіть контакт для зв'язку."
-    },
-    "ask_category": {
-        "uk": "Виберіть категорію вашої проблеми:"
-    },
-    "ask_problem": {
-        "uk": "Опишіть вашу проблему:"
-    },
-    "ticket_sent": {
-        "uk": "✅ Ваша заявка {ticket} відправлена юристам. Очікуйте відповіді ⏳"
-    },
-    "ticket_accepted_client": {
-        "uk": "✅ Ваша заявка {ticket} прийнята. Юрист вже опрацьовує Ваше звернення та зв'яжеться з Вами найближчим часом."
-    }
-}
-
-# --- Счетчик заявок (на основе файла counter.txt) ---
-def get_next_ticket_number():
-    # Эта логика работает локально. На хостинге нужно будет использовать базу данных.
-    # Для целей тестирования оставим файловый метод.
-    # В реальном приложении это место нужно будет изменить на работу с Firestore/SQL.
-    if not os.path.exists("counter.txt"):
-        with open("counter.txt", "w") as f:
-            f.write("0")
-    with open("counter.txt", "r") as f:
-        number = int(f.read().strip())
-    number += 1
-    with open("counter.txt", "w") as f:
-        f.write(str(number))
-    return f"#{number:03d}"
-
-# --- Клавиатуры ---
+# --- ФУНКЦИИ СОЗДАНИЯ КЛАВИАТУР ---
 
 def get_category_kb():
-    # Используем только uk, так как язык фиксирован
-    lang = "uk"
-    kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=name[lang])] for name in CATEGORIES.values()],
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
-    return kb
+    """Создает клавиатуру для выбора категории"""
+    kb = []
+    # Формируем кнопки из словаря категорий, по 2 кнопки в ряд
+    category_list = list(CATEGORIES_UK.keys())
+    for i in range(0, len(category_list), 2):
+        row = [KeyboardButton(text=category_list[i])]
+        if i + 1 < len(category_list):
+            row.append(KeyboardButton(text=category_list[i+1]))
+        kb.append(row)
+
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True, one_time_keyboard=True)
 
 def get_contact_kb():
-    lang = "uk"
-    contact_btn = KeyboardButton("📱 Надіслати свій номер", request_contact=True)
-    manual_btn = KeyboardButton("✍️ Ввести вручну")
+    """Создает клавиатуру для отправки контакта"""
+    # ИСПРАВЛЕНИЕ BASEMODEL: Используем именованный аргумент text=
+    contact_btn = KeyboardButton(text="📱 Надіслати свій номер", request_contact=True)
+    manual_btn = KeyboardButton(text="✍️ Ввести вручну")
     kb = ReplyKeyboardMarkup(
         keyboard=[[contact_btn], [manual_btn]],
         resize_keyboard=True,
@@ -106,205 +68,227 @@ def get_contact_kb():
     return kb
 
 def get_restart_kb():
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+    """Создает инлайн-кнопку для начала новой заявки"""
+    # ИСПРАВЛЕНИЕ BASEMODEL: Используем именованный аргумент text=
+    return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔁 Розпочати нову заявку", callback_data="start_new_ticket")]
     ])
-    return kb
 
+# --- ОБРАБОТЧИКИ КОМАНД И СОСТОЯНИЙ ---
 
-# --- ОБРАБОТЧИКИ ---
+@dp.message(CommandStart())
+@dp.callback_query(F.data == "start_new_ticket")
+async def command_start_handler(callback_or_message: types.CallbackQuery | types.Message, state: FSMContext):
+    """
+    Обработчик команды /start и нажатия кнопки "Розпочати нову заявку".
+    Запускает FSM и запрашивает имя.
+    """
+    # Определяем, что пришло: сообщение или колбэк
+    if isinstance(callback_or_message, types.Message):
+        message = callback_or_message
+        await message.answer(
+            "👋 Вітаємо! Я ваш помічник у створенні юридичної заявки. Будь ласка, вкажіть ваше ім'я та прізвище:",
+            reply_markup=types.ReplyKeyboardRemove()
+        )
+    else:
+        callback = callback_or_message
+        message = callback.message
+        await callback.answer()
+        await message.edit_text(
+            "👋 Вітаємо! Я ваш помічник у створенні юридичної заявки. Будь ласка, вкажіть ваше ім'я та прізвище:",
+            reply_markup=None # Удаляем инлайн-кнопку
+        )
 
-# --- Старт бота / Перезапуск ---
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message, state: FSMContext):
+    # Устанавливаем первое состояние
     await state.set_state(Form.waiting_for_name)
-    await state.update_data(lang="uk") # Устанавливаем язык по умолчанию
+    # Очищаем контекст, чтобы начать новую заявку
+    await state.clear()
+
+@dp.message(StateFilter(Form.waiting_for_name), F.text)
+async def process_name(message: types.Message, state: FSMContext):
+    """Обрабатывает введенное имя и запрашивает контакт."""
+    user_name = message.text.strip()
+    await state.update_data(name=user_name)
+    await state.set_state(Form.waiting_for_contact)
     await message.answer(
-        TEXTS["ask_name"]["uk"], 
-        reply_markup=ReplyKeyboardMarkup(keyboard=[], resize_keyboard=True)
+        f"✅ Дякую, {user_name}! Тепер вкажіть контакт для зв'язку.",
+        reply_markup=get_contact_kb()
     )
 
-# --- Имя ---
-@dp.message(StateFilter(Form.waiting_for_name))
-async def process_name(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    lang = data["lang"]
-    await state.update_data(name=message.text)
-    await state.set_state(Form.waiting_for_contact)
-    await message.answer(TEXTS["ask_contact"][lang], reply_markup=get_contact_kb())
+# --- ОБРАБОТЧИКИ КОНТАКТОВ ---
 
-# --- Контакт (share/contact) ---
 @dp.message(StateFilter(Form.waiting_for_contact), F.contact)
-async def process_contact_share(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    lang = data["lang"]
-    await state.update_data(contact=message.contact.phone_number)
+async def process_contact(message: types.Message, state: FSMContext):
+    """Обрабатывает контакт, полученный через кнопку 'Надіслати свій номер'."""
+    contact = message.contact.phone_number
+    await state.update_data(contact=contact)
     await state.set_state(Form.waiting_for_category)
-    await message.answer(TEXTS["ask_category"][lang], reply_markup=get_category_kb())
+    await message.answer(
+        "📞 Ваш контакт збережено. Тепер оберіть категорію вашого питання:",
+        reply_markup=get_category_kb()
+    )
 
-# --- Контакт (вручную) ---
-@dp.message(StateFilter(Form.waiting_for_contact))
+@dp.message(StateFilter(Form.waiting_for_contact), F.text == "✍️ Ввести вручну")
+async def process_contact_manual_start(message: types.Message, state: FSMContext):
+    """Запрашивает ручной ввод контакта."""
+    await message.answer(
+        "Будь ласка, введіть ваш номер телефону або інший контакт (наприклад, Email/Telegram username):",
+        reply_markup=types.ReplyKeyboardRemove()
+    )
+    # Состояние остается Form.waiting_for_contact, но мы ждем текст, а не контакт-объект
+
+@dp.message(StateFilter(Form.waiting_for_contact), F.text)
 async def process_contact_manual(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    lang = data["lang"]
+    """Обрабатывает контакт, введенный вручную."""
+    contact = message.text.strip()
     
-    if "Ввести" in message.text: # Если пользователь нажал кнопку "Ввести вручную"
-        await message.answer("Введіть контакт вручну:", reply_markup=ReplyKeyboardMarkup(keyboard=[], resize_keyboard=True))
-    else: # Пользователь ввел контакт вручную
-        await state.update_data(contact=message.text)
-        await state.set_state(Form.waiting_for_category)
-        await message.answer(TEXTS["ask_category"][lang], reply_markup=get_category_kb())
-
-# --- Категория ---
-@dp.message(StateFilter(Form.waiting_for_category))
-async def process_category(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    lang = data["lang"]
-    selected = None
-    for key, names in CATEGORIES.items():
-        if message.text == names[lang]:
-            selected = key
-            break
-            
-    if not selected:
-        await message.answer(TEXTS["ask_category"][lang], reply_markup=get_category_kb())
+    if contact == "✍️ Ввести вручну":
+        # Если пользователь повторно нажал кнопку "Ввести вручну", игнорируем
         return
         
-    await state.update_data(category=selected)
-    await state.set_state(Form.waiting_for_problem)
-    await message.answer(TEXTS["ask_problem"][lang], reply_markup=ReplyKeyboardMarkup(keyboard=[], resize_keyboard=True))
-
-# --- Проблема (ФИНАЛ) ---
-@dp.message(StateFilter(Form.waiting_for_problem))
-async def process_problem(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    lang = data["lang"]
-    name = data["name"]
-    contact = data["contact"]
-    category = data["category"]
-    problem = message.text
-    ticket = get_next_ticket_number()
-    user_id = message.from_user.id
-    
-    # 1. Уведомление клиента
+    await state.update_data(contact=contact)
+    await state.set_state(Form.waiting_for_category)
     await message.answer(
-        TEXTS["ticket_sent"][lang].format(ticket=ticket), 
-        reply_markup=get_restart_kb() # Добавляем кнопку "Начать заново"
+        "📞 Ваш контакт збережено. Тепер оберіть категорію вашого питання:",
+        reply_markup=get_category_kb()
     )
 
-    # 2. Формирование сообщения для юристов
-    category_name_ru = CATEGORIES[category]["ru"] # Используем русское название для юристов
-    username = message.from_user.username
-    tg_link = f"@{username}" if username else "—"
-    
-    lawyer_text = (
-        f"🆕 <b>Новая заявка {ticket}</b>\n"
-        f"📂 Категория: {category_name_ru}\n\n"
-        f"👤 Имя: {name}\n"
-        f"📱 Контакт: {contact}\n"
-        f"💬 Telegram: {tg_link} (ID: <code>{user_id}</code>)\n\n"
-        f"📄 Проблема:\n{problem}"
+# --- ОБРАБОТЧИКИ КАТЕГОРИЙ И ОПИСАНИЙ ---
+
+@dp.message(StateFilter(Form.waiting_for_category), F.text.in_(CATEGORIES_UK.keys()))
+async def process_category(message: types.Message, state: FSMContext):
+    """Обрабатывает выбранную категорию и запрашивает описание."""
+    category = message.text
+    await state.update_data(category=category)
+    await state.set_state(Form.waiting_for_description)
+    await message.answer(
+        f"🛠 Ви обрали категорію **{category}**. Тепер детально опишіть вашу проблему. Будь ласка, вкажіть усі ключові деталі:",
+        reply_markup=types.ReplyKeyboardRemove(),
+        parse_mode=ParseMode.MARKDOWN
     )
 
-    # 3. Кнопки для юристов
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Взять в работу", callback_data=f"accept:{user_id}:{ticket}"),
-         InlineKeyboardButton(text="⛔ Отклонить", callback_data=f"decline:{user_id}:{ticket}")]
-    ])
+@dp.message(StateFilter(Form.waiting_for_description), F.text)
+async def process_description(message: types.Message, state: FSMContext):
+    """Обрабатывает описание, формирует заявку и завершает FSM."""
+    description = message.text.strip()
+    data = await state.get_data()
     
-    # 4. Отправка в группу юристов и архив
-    sent_message = await bot.send_message(LAWYERS_GROUP_ID, lawyer_text, parse_mode="HTML", reply_markup=keyboard)
-    # Сохраняем ID сообщения юристов для дальнейшего редактирования
-    await state.update_data(lawyers_msg_id=sent_message.message_id) 
-    await bot.send_message(ARCHIVE_GROUP_ID, lawyer_text, parse_mode="HTML") # Архив
+    # 1. Формируем текст заявки
+    user_info = (
+        f"🧑 Користувач: {data.get('name')}\n"
+        f"📞 Контакт: {data.get('contact')}\n"
+        f"🏷 Категорія: {data.get('category')}\n"
+        f"🆔 ID користувача: `{message.from_user.id}`\n"
+        f"🔗 Посилання: [@{message.from_user.username}](tg://user?id={message.from_user.id})"
+    )
+    ticket_text = (
+        f"**🚨 НОВА ЗАЯВКА - {data.get('category').upper()} 🚨**\n\n"
+        f"{user_info}\n\n"
+        f"📝 **ОПИС ПРОБЛЕМИ:**\n{description}"
+    )
 
-    # 5. Очистка состояния
-    await state.clear()
-
-
-# --- Обработка нажатий кнопок юристами ---
-@dp.callback_query(F.data.startswith(("accept", "decline")))
-async def process_lawyer_action(callback_query: types.CallbackQuery, state: FSMContext):
-    action, user_id, ticket = callback_query.data.split(":")
-    lawyer_id = callback_query.from_user.id
-    lawyer_name = callback_query.from_user.full_name
-    
-    # 1. Получаем оригинальный текст сообщения (который содержит детали заявки)
-    original_text = callback_query.message.html_text
-    
-    # 2. Определяем статус и текст уведомления
-    if action == "accept":
-        new_status_line = f"✅ ЗАЯВКА {ticket} ВЗЯТА В РАБОТУ"
-        client_notification_key = "ticket_accepted_client"
-    else: # action == "decline"
-        new_status_line = f"⛔ ЗАЯВКА {ticket} ОТКЛОНЕНА"
-        
-    # 3. Редактируем сообщение в группе юристов (защита от двойного нажатия)
+    # 2. Отправляем заявку в группу юристов
     try:
-        # Разделяем оригинальный текст на заголовок и тело
-        parts = original_text.split('\n', 1)
-        if len(parts) < 2:
-            body = original_text
-        else:
-            body = parts[1]
-            
-        final_text = (
-            f"<b>{new_status_line}</b>\n"
-            f"{body}\n\n"
-            f"<i>Обработал: {lawyer_name} ({lawyer_id})</i>"
+        sent_message = await bot.send_message(
+            LAWYERS_GROUP_ID,
+            ticket_text,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        ticket_id = sent_message.message_id
+        await state.update_data(ticket_id=ticket_id)
+        
+        # 3. Отправляем подтверждение пользователю
+        await message.answer(
+            "🎉 **Ваша заявка успішно надіслана!**\n\n"
+            "Наші спеціалісти вже її обробляють. Очікуйте відповіді найближчим часом.",
+            reply_markup=get_restart_kb(),
+            parse_mode=ParseMode.MARKDOWN
         )
         
-        await callback_query.message.edit_text(
-            final_text,
-            reply_markup=None, # Убираем кнопки
-            parse_mode="HTML"
-        )
-        
-        # 4. Уведомление юриста
-        await callback_query.answer(f"Заявка {ticket} успешно обработана!", show_alert=True)
-        
-        # 5. Уведомление клиента (только при принятии)
-        if action == "accept":
-            try:
-                # Отправляем общее уведомление клиенту
-                await bot.send_message(
-                    int(user_id), 
-                    TEXTS[client_notification_key]["uk"].format(ticket=ticket),
-                    reply_markup=get_restart_kb()
-                )
-            except Exception as e:
-                print(f"Ошибка при уведомлении клиента {user_id}: {e}")
-
     except Exception as e:
-        # Срабатывает, если другой юрист успел отредактировать сообщение первым (конфликт)
-        print(f"Ошибка редактирования сообщения (конфликт/ошибка парсинга): {e}")
-        await callback_query.answer("⚠️ Заявка была обработана другим сотрудником или возникла техническая ошибка.", show_alert=True)
-        
-# --- Обработка кнопки "Начать заново" ---
-@dp.callback_query(F.data == "start_new_ticket")
-async def callback_restart(callback_query: types.CallbackQuery, state: FSMContext):
-    await callback_query.answer()
-    # Сбрасываем состояние и запускаем команду start
+        logging.error(f"Помилка відправки заявки до групи юристів: {e}")
+        await message.answer(
+            "❌ Виникла помилка при відправці заявки. Спробуйте пізніше або зв'яжіться з нами.",
+            reply_markup=get_restart_kb()
+        )
+
+    # 4. Сохраняем заявку в архив
+    try:
+        await bot.send_message(
+            ARCHIVE_GROUP_ID,
+            f"АРХІВ ЗАЯВКИ #{ticket_id}\n{ticket_text}",
+            parse_mode=ParseMode.MARKDOWN
+        )
+    except Exception as e:
+        logging.error(f"Помилка відправки в архів: {e}")
+
+    # 5. Завершаем FSM
     await state.clear()
-    # Отправляем /start для начала процесса
-    await cmd_start(callback_query.message, state)
 
 
-# --- ЗАПУСК ---
+@dp.message()
+async def echo_handler(message: types.Message):
+    """Ловит все сообщения вне FSM и отправляет пользователю команду начала."""
+    # Проверяем, находится ли пользователь в каком-либо состоянии FSM
+    state = await dp.fsm.storage.get_state(bot=bot, chat_id=message.chat.id, user_id=message.from_user.id)
+    if state is None:
+        await message.answer(
+            "Будь ласка, скористайтеся командою /start, щоб почати нову заявку."
+        )
+
+# --- ЗАПУСК БОТА ---
 async def main():
-    # Запуск функции для поддержания активности на Replit
-    keep_alive() 
-    print(f"✅ Бот успешно подключен! Имя: @{await bot.get_me().username}. Начинаем опрос сервера...")
-    # Удаляем вебхуки и запускаем polling
-    try:
-        await bot.delete_webhook(drop_pending_updates=True)
-    except Exception as e:
-        print(f"Предупреждение: Не удалось удалить вебхук: {e}")
-        
-    await dp.start_polling(bot)
+    # Проверка на наличие токена
+    if not API_TOKEN:
+        print("❌ КРИТИЧЕСКАЯ ОШИБКА: API_TOKEN не найден в переменных окружения. Убедитесь, что он добавлен в Replit Secrets.")
+        return
 
-if __name__ == "__main__":
+    # Инициализация бота и диспетчера
+    global bot, dp # Объявляем глобально для доступа в обработчиках
+    bot = Bot(API_TOKEN, parse_mode=ParseMode.HTML)
+    dp = Dispatcher()
+
+    # Регистрация обработчиков (делаем это явно, чтобы избежать проблем)
+    dp.message.register(command_start_handler, CommandStart())
+    dp.callback_query.register(command_start_handler, F.data == "start_new_ticket")
+    
+    dp.message.register(process_name, StateFilter(Form.waiting_for_name), F.text)
+    
+    dp.message.register(process_contact, StateFilter(Form.waiting_for_contact), F.contact)
+    dp.message.register(process_contact_manual_start, StateFilter(Form.waiting_for_contact), F.text == "✍️ Ввести вручну")
+    dp.message.register(process_contact_manual, StateFilter(Form.waiting_for_contact), F.text)
+
+    dp.message.register(process_category, StateFilter(Form.waiting_for_category), F.text.in_(CATEGORIES_UK.keys()))
+    dp.message.register(process_description, StateFilter(Form.waiting_for_description), F.text)
+
+    # Ловим все остальные сообщения
+    dp.message.register(echo_handler)
+    
+    # 1. Запуск веб-сервера Flask для Replit
+    keep_alive()
+
+    # 2. Проверка токена и имени бота
+    try:
+        me = await bot.get_me()
+        print(f"✅ Бот успешно подключен! Имя: @{me.username}. Начинаем опрос сервера...")
+    except Exception as e:
+        print(f"❌ Ошибка подключения бота (токен неверный?): {e}")
+        return
+
+    # 3. Запуск основного цикла бота
+    try:
+        # Удаляем старые вебхуки (если были)
+        await bot.delete_webhook(drop_pending_updates=True)
+        # Начинаем опрос сервера
+        await dp.start_polling(bot)
+    except Exception as e:
+        print(f"❌ Критическая ошибка при запуске polling: {e}")
+
+if __name__ == '__main__':
+    # Запускаем асинхронную функцию main
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("Бот остановлен пользователем.")
+        print("Бот остановлен.")
+    except Exception as e:
+        print(f"Произошла непредвиденная ошибка при запуске main(): {e}")
