@@ -9,16 +9,19 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram import F
+# Добавляем импорт для функции поддержания активности Replit
+from keep_alive import keep_alive 
 
 # --- КОНФИГУРАЦИЯ ---
-# Бот будет брать API_TOKEN из переменной окружения на хостинге
-API_TOKEN = os.getenv("8030224064:AAE3ERioo_7jEU8HzExKhUFpi-3LYK7CrAE") 
+# Бот будет брать API_TOKEN из переменной окружения Replit (Secrets)
+API_TOKEN = os.getenv("API_TOKEN") 
+# ЗАМЕНИТЕ ЭТИ ID НА РЕАЛЬНЫЕ:
 LAWYERS_GROUP_ID = -1002929346188
 ARCHIVE_GROUP_ID = -1003171406428
 
 # Инициализация
 if not API_TOKEN:
-    print("❌ ОШИБКА: API_TOKEN не найден. Проверьте переменную окружения.")
+    print("❌ ОШИБКА: API_TOKEN не найден. Проверьте переменную окружения Replit (Secrets).")
     exit()
     
 bot = Bot(token=API_TOKEN)
@@ -283,11 +286,14 @@ async def callback_restart(callback_query: types.CallbackQuery, state: FSMContex
     await callback_query.answer()
     # Сбрасываем состояние и запускаем команду start
     await state.clear()
+    # Отправляем /start для начала процесса
     await cmd_start(callback_query.message, state)
 
 
 # --- ЗАПУСК ---
 async def main():
+    # Запуск функции для поддержания активности на Replit
+    keep_alive() 
     print(f"✅ Бот успешно подключен! Имя: @{await bot.get_me().username}. Начинаем опрос сервера...")
     # Удаляем вебхуки и запускаем polling
     try:
