@@ -1,3 +1,2 @@
-aiogram==3.11.1
-pydantic==2.4.2
-Flask
+aiogram
+python-dotenv
